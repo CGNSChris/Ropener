@@ -54,14 +54,33 @@ jobs:
             esphome compile "${{ matrix.config }}"
           fi
 
+      # Locate by FILENAME, not by directory. esphome 2026.8 builds ESP32 targets
+      # with native ESP-IDF instead of PlatformIO, so the binaries moved from
+      # <build>/.pioenvs/<name>/ to <build>/build/. The names are unchanged.
+      # Matching on the name survives both layouts and the next move too.
+      #
+      # And FAIL LOUDLY. The previous version piped an unchecked `find` straight
+      # into cp, so a layout change produced `cp: cannot stat ''` with no clue
+      # what was actually built. A release that silently ships no assets is the
+      # exact failure this pipeline exists to prevent.
       - name: Collect binaries + md5
         run: |
+          set -euo pipefail
           mkdir -p dist
-          F=$(find . -path "*/.pioenvs/*/firmware.factory.bin" | head -1)
-          O=$(find . -path "*/.pioenvs/*/firmware.ota.bin" | head -1)
+          F=$(find . -name "firmware.factory.bin" -type f | head -1)
+          O=$(find . -name "firmware.ota.bin" -type f | head -1)
+          if [ -z "$F" ] || [ -z "$O" ]; then
+            echo "::error::Firmware binaries not found - esphome's output layout may have changed again."
+            echo "Binaries actually present:"
+            find . -name "*.bin" -type f | grep -v -E "bootloader|partitions" | head -40
+            exit 1
+          fi
+          echo "factory: $F"
+          echo "ota:     $O"
           cp "$F" "dist/${{ matrix.asset }}.factory.bin"
           cp "$O" "dist/${{ matrix.asset }}.ota.bin"
           md5sum "dist/${{ matrix.asset }}.ota.bin" | cut -d' ' -f1 > "dist/${{ matrix.asset }}.ota.bin.md5"
+          ls -l dist/
 
       - uses: actions/upload-artifact@v4
         with:
