@@ -11,7 +11,12 @@ substitutions:
   board_id: "VAL3100 (ESP32-C6)"
   esp_board: "esp32-c6-devkitc-1"
   log_uart: "USB_SERIAL_JTAG"
-  ota_repo: "Valar-Systems/Ropener"     # field units self-update from Ropener's own releases
+  # OTA points at Chris's FORK, not upstream. The overrides below (rsense,
+  # button pull-ups) are not in upstream binaries, so an upstream OTA would
+  # silently undo them. Pointing here means no reachable binary lacks them.
+  ota_repo: "CGNSChris/Ropener"
+  # ota_asset MUST stay "Ropener-VAL3100": the release workflow names its
+  # artefacts from it and the device fetches <asset>.ota.bin by that name.
   ota_asset: "Ropener-VAL3100"
   # "dev" for local/branch builds; the release workflow overrides it with the
   # git tag (-s fw_version) so shipped units report the version they run.
@@ -51,3 +56,34 @@ light:
     pin:
       number: GPIO23
       inverted: false
+
+# --- Chris's build: button pull-ups -----------------------------------------
+# This build uses bare tactile switches on short leads, not the VAL board's
+# 10k pull-up + 5k1 series + 100nF + ESD clamp per button. Substituting the
+# ESP32's internal ~45k pull-up is fine for board-mounted buttons on short
+# leads. The FULL pin block is restated so the mode change applies cleanly.
+# valar-core defines btn1/btn2/btn3; ropener-product.yaml already extends them
+# with the gesture handlers, so this is a SECOND extend on each -- after any
+# change, run `esphome config` and confirm both that the mode resolved to
+# INPUT_PULLUP and that the on_press/on_release handlers are still attached.
+binary_sensor:
+  - id: !extend btn1
+    pin: { number: 3, mode: INPUT_PULLUP, inverted: true }
+  - id: !extend btn2
+    pin: { number: 19, mode: INPUT_PULLUP, inverted: true }
+  - id: !extend btn3
+    pin: { number: 4, mode: INPUT_PULLUP, inverted: true }
+
+# --- Chris's build: TMC2209 sense resistor ----------------------------------
+# BTT TMC2209 modules use 110 mOhm sense resistors; the VAL3100 board uses 100.
+# Without this, every current value (IRUN) is set about 10% high.
+#
+# NOTE: a `stepper_rsense` SUBSTITUTION does NOT work -- valar-core.yaml hardcodes
+# `rsense: 100 mOhm` on the `driver` stepper and exposes no substitution for it.
+# Setting one is silently inert: the config still resolves to rsense 0.1. The
+# override has to !extend the component itself, which is the same mechanism
+# valar-core's own comment anticipates for product-level overrides.
+# Verify after any core bump: `esphome config` must show `rsense: 0.11`.
+stepper:
+  - id: !extend driver
+    rsense: 110 mOhm

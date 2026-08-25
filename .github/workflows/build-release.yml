@@ -14,6 +14,12 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Upstream relies on the account default for GITHUB_TOKEN. On accounts that
+    # default to read-only, the "Attach to release" step below fails and the
+    # release publishes with NO ASSETS -- which looks like a successful release
+    # but leaves field units unable to update. Declare it explicitly instead.
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -24,11 +30,44 @@ jobs:
             asset: Ropener-VAL3100
     steps:
       - uses: actions/checkout@v4
+      # Deliberately tracking upstream: 3.11, as upstream sets.
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      # PINNED, and pinned to what upstream ACTUALLY builds. Upstream writes a
+      # bare `pip install esphome` on python 3.11; since esphome 2026.7.0 requires
+      # >=3.12, pip silently resolves to 2026.6.5 -- the newest 3.11-compatible
+      # release. So upstream's "latest" build has quietly been frozen here.
+      # Naming it makes the version a visible decision instead of an accident,
+      # WITHOUT changing which firmware gets built.
+      #
+      # Do NOT bump this casually. 2026.8.x builds ESP32 targets with native
+      # ESP-IDF instead of PlatformIO -- a real change in how the binary is
+      # produced, untested on this hardware. Bump deliberately, like the
+      # valar-motion tag, and bench-test unit 1 before tagging a release.
       - name: Install ESPHome
-        run: pip install esphome
+        run: pip install esphome==2026.6.5
+
+      # Guard against the failure class that started this fork: an override that
+      # is ACCEPTED but does nothing. A `stepper_rsense` substitution was silently
+      # inert -- valar-core hardcodes rsense, nothing consumed it, the config was
+      # valid and the build green, and the board would have run ~10% off. The only
+      # thing that exposes it is the RESOLVED config, so assert on that.
+      - name: Verify Chris's overrides survived
+        if: matrix.asset == 'Ropener-VAL3100'
+        run: |
+          set -uo pipefail
+          esphome config "${{ matrix.config }}" > resolved.yaml
+          grep -q "rsense: 0.11" resolved.yaml || {
+            echo "::error::rsense override lost - expected 0.11 (110 mOhm for BTT modules)"
+            grep -n "rsense" resolved.yaml || true; exit 1; }
+          grep -q "CGNSChris/Ropener/releases/latest/download/Ropener-VAL3100.ota.bin" resolved.yaml || {
+            echo "::error::OTA no longer points at the fork - an upstream binary would undo the overrides"
+            grep -n "releases/latest" resolved.yaml || true; exit 1; }
+          N=$(grep -c "pullup: true" resolved.yaml || true)
+          [ "${N:-0}" -ge 3 ] || {
+            echo "::error::button pull-ups lost - expected at least 3, found ${N:-0}"; exit 1; }
+          echo "overrides verified: rsense 0.11, fork OTA, ${N} pull-ups"
 
       # On a tag build, stamp the release version (strip a leading "v") so the
       # on-device "Firmware Version" matches the release the unit is running.
@@ -41,14 +80,33 @@ jobs:
             esphome compile "${{ matrix.config }}"
           fi
 
+      # Locate by FILENAME, not by directory. esphome 2026.8 builds ESP32 targets
+      # with native ESP-IDF instead of PlatformIO, so the binaries moved from
+      # <build>/.pioenvs/<name>/ to <build>/build/. The names are unchanged.
+      # Matching on the name survives both layouts and the next move too.
+      #
+      # And FAIL LOUDLY. The previous version piped an unchecked `find` straight
+      # into cp, so a layout change produced `cp: cannot stat ''` with no clue
+      # what was actually built. A release that silently ships no assets is the
+      # exact failure this pipeline exists to prevent.
       - name: Collect binaries + md5
         run: |
+          set -euo pipefail
           mkdir -p dist
-          F=$(find . -path "*/.pioenvs/*/firmware.factory.bin" | head -1)
-          O=$(find . -path "*/.pioenvs/*/firmware.ota.bin" | head -1)
+          F=$(find . -name "firmware.factory.bin" -type f | head -1)
+          O=$(find . -name "firmware.ota.bin" -type f | head -1)
+          if [ -z "$F" ] || [ -z "$O" ]; then
+            echo "::error::Firmware binaries not found - esphome's output layout may have changed again."
+            echo "Binaries actually present:"
+            find . -name "*.bin" -type f | grep -v -E "bootloader|partitions" | head -40
+            exit 1
+          fi
+          echo "factory: $F"
+          echo "ota:     $O"
           cp "$F" "dist/${{ matrix.asset }}.factory.bin"
           cp "$O" "dist/${{ matrix.asset }}.ota.bin"
           md5sum "dist/${{ matrix.asset }}.ota.bin" | cut -d' ' -f1 > "dist/${{ matrix.asset }}.ota.bin.md5"
+          ls -l dist/
 
       - uses: actions/upload-artifact@v4
         with:
