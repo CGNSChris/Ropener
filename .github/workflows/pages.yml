@@ -52,6 +52,18 @@ jobs:
             --pattern 'Ropener-VAL3000.factory.bin' \
             --pattern 'Ropener-VAL3100.factory.bin' \
             --dir flash --clobber
+      # Stamp the manifest version from the same release the binaries came from,
+      # so the ESP Web Tools dialog reports the firmware it actually installs
+      # instead of a hand-maintained number that drifts (it had drifted).
+      - name: Stamp manifest version from the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=$(gh release view --repo "${{ github.repository }}" --json tagName --jq .tagName)
+          V="${TAG#v}"
+          jq --arg v "$V" '.version = $v' flash/manifest.json > manifest.tmp
+          mv manifest.tmp flash/manifest.json
+          echo "manifest version: $V"
       - uses: actions/configure-pages@v5
         with:
           enablement: true
