@@ -14,6 +14,12 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Upstream relies on the account default for GITHUB_TOKEN. On accounts that
+    # default to read-only, the "Attach to release" step below fails and the
+    # release publishes with NO ASSETS -- which looks like a successful release
+    # but leaves field units unable to update. Declare it explicitly instead.
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -27,8 +33,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      # PINNED deliberately. A bare `pip install esphome` means two builds of the
+      # same commit are not the same firmware. Bump this on purpose, the same way
+      # valar-motion is pinned to a tag, and bench-test unit 1 after each bump.
       - name: Install ESPHome
-        run: pip install esphome
+        run: pip install esphome==2026.8.1
 
       # On a tag build, stamp the release version (strip a leading "v") so the
       # on-device "Firmware Version" matches the release the unit is running.
