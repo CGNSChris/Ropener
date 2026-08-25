@@ -30,9 +30,13 @@ jobs:
             asset: Ropener-VAL3100
     steps:
       - uses: actions/checkout@v4
+      # 3.12 minimum: esphome >= 2026.7.0 declares Requires-Python >=3.12,<3.15.
+      # Upstream pinned 3.11 AND left esphome unpinned, so pip silently resolved
+      # to 2026.6.5 -- the newest 3.11-compatible release -- and the build has
+      # been frozen there rather than tracking latest as intended.
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       # PINNED deliberately. A bare `pip install esphome` means two builds of the
       # same commit are not the same firmware. Bump this on purpose, the same way
       # valar-motion is pinned to a tag, and bench-test unit 1 after each bump.
