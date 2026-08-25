@@ -30,18 +30,44 @@ jobs:
             asset: Ropener-VAL3100
     steps:
       - uses: actions/checkout@v4
-      # 3.12 minimum: esphome >= 2026.7.0 declares Requires-Python >=3.12,<3.15.
-      # Upstream pinned 3.11 AND left esphome unpinned, so pip silently resolved
-      # to 2026.6.5 -- the newest 3.11-compatible release -- and the build has
-      # been frozen there rather than tracking latest as intended.
+      # Deliberately tracking upstream: 3.11, as upstream sets.
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-      # PINNED deliberately. A bare `pip install esphome` means two builds of the
-      # same commit are not the same firmware. Bump this on purpose, the same way
-      # valar-motion is pinned to a tag, and bench-test unit 1 after each bump.
+          python-version: '3.11'
+      # PINNED, and pinned to what upstream ACTUALLY builds. Upstream writes a
+      # bare `pip install esphome` on python 3.11; since esphome 2026.7.0 requires
+      # >=3.12, pip silently resolves to 2026.6.5 -- the newest 3.11-compatible
+      # release. So upstream's "latest" build has quietly been frozen here.
+      # Naming it makes the version a visible decision instead of an accident,
+      # WITHOUT changing which firmware gets built.
+      #
+      # Do NOT bump this casually. 2026.8.x builds ESP32 targets with native
+      # ESP-IDF instead of PlatformIO -- a real change in how the binary is
+      # produced, untested on this hardware. Bump deliberately, like the
+      # valar-motion tag, and bench-test unit 1 before tagging a release.
       - name: Install ESPHome
-        run: pip install esphome==2026.8.1
+        run: pip install esphome==2026.6.5
+
+      # Guard against the failure class that started this fork: an override that
+      # is ACCEPTED but does nothing. A `stepper_rsense` substitution was silently
+      # inert -- valar-core hardcodes rsense, nothing consumed it, the config was
+      # valid and the build green, and the board would have run ~10% off. The only
+      # thing that exposes it is the RESOLVED config, so assert on that.
+      - name: Verify Chris's overrides survived
+        if: matrix.asset == 'Ropener-VAL3100'
+        run: |
+          set -uo pipefail
+          esphome config "${{ matrix.config }}" > resolved.yaml
+          grep -q "rsense: 0.11" resolved.yaml || {
+            echo "::error::rsense override lost - expected 0.11 (110 mOhm for BTT modules)"
+            grep -n "rsense" resolved.yaml || true; exit 1; }
+          grep -q "CGNSChris/Ropener/releases/latest/download/Ropener-VAL3100.ota.bin" resolved.yaml || {
+            echo "::error::OTA no longer points at the fork - an upstream binary would undo the overrides"
+            grep -n "releases/latest" resolved.yaml || true; exit 1; }
+          N=$(grep -c "pullup: true" resolved.yaml || true)
+          [ "${N:-0}" -ge 3 ] || {
+            echo "::error::button pull-ups lost - expected at least 3, found ${N:-0}"; exit 1; }
+          echo "overrides verified: rsense 0.11, fork OTA, ${N} pull-ups"
 
       # On a tag build, stamp the release version (strip a leading "v") so the
       # on-device "Firmware Version" matches the release the unit is running.
